@@ -5,14 +5,11 @@ import Web.Scotty as Scotty
 import Data.Aeson (object, (.=))
 import Data.Aeson.Lens
 import Control.Concurrent.STM.TBMQueue
-import Control.Concurrent
 import Control.Concurrent.STM
 import Network.AWS as AWS
 import Network.AWS.SES.SendEmail as AWS
 import Control.Immortal
-import System.Posix.Process
 import System.Posix.Signals
-import System.Posix.Types
 import Network.Socket as Socket
 import Control.Exception
 import Data.Default
@@ -39,18 +36,20 @@ bindSocketPort p =
     return sock
 
 worker :: Thread -> Env -> TBMQueue SendEmail -> IO ()
-worker thread env queue = handle logAnyError $ runResourceT $ runAWS env $ go where
+worker thread env queue = handle logAnyError $ runResourceT $ runAWS env go where
      go :: AWS ()
      go = do
        mpayload <- liftIO $ atomically $ readTBMQueue queue
        case mpayload of
+         -- Nothing means the queue is closed and empty.
+         -- Stop the loop and kill the thread.
          Nothing -> liftIO $ stop thread
          Just payload -> do
-           result <- AWS.send payload
-           let status = view sersResponseStatus result
+           resp <- AWS.send payload
+           let stat = view sersResponseStatus resp
 
-           unless (status >= 200 && status < 300) $
-             liftIO $ putStrLn $ "SES failed with status: " ++ show status
+           unless (stat >= 200 && stat < 300) $
+             liftIO $ putStrLn $ "SES failed with status: " ++ show stat
 
            go
 
@@ -67,8 +66,9 @@ enqueueEmail queue email = do
             $ makeEmail email
 
   for_ msuccess $ \success ->
-    unless success $ print "Failed to enqueue email! Increase bounded queue size!"
+    unless success $ putStrLn "Failed to enqueue email! Increase bounded queue size!"
 
+missingEmailError :: ActionM a
 missingEmailError = status status400 >> text "missing email" >> finish
 
 main :: IO ()
@@ -102,14 +102,13 @@ main = do
            email <- maybe missingEmailError return
                   $ input ^? key "email" . _String
 
-           response <- liftIO $ runResourceT $ runAWS env $ AWS.send $ makeEmail email
-           let status = view sersResponseStatus response
+           resp <- liftIO $ runResourceT $ runAWS env $ AWS.send $ makeEmail email
+           let stat = view sersResponseStatus resp
 
-           unless (status >= 200 && status < 300) $
-             liftIO $ putStrLn $ "SES failed with status: " ++ show status
+           unless (stat >= 200 && stat < 300) $
+             liftIO $ putStrLn $ "SES failed with status: " ++ show stat
 
            json $ object ["id" .= email]
 
   atomically $ closeTBMQueue queue
   mapM_ wait threads
-
