@@ -7,17 +7,13 @@ import Data.Aeson.Lens
 import Control.Concurrent.STM.TBMQueue
 import Control.Concurrent
 import Control.Concurrent.STM
-import Network.AWS
+import Network.AWS as AWS
 import Network.AWS.SES.SendEmail as AWS
 import Control.Immortal
 import System.Posix.Process
 import System.Posix.Signals
 import System.Posix.Types
-import Network.Socket ( Socket, PortNumber, socket, close
-                      , maxListenQueue, listen, tupleToHostAddress, SockAddr (..)
-                      , bind, SocketOption (..), setSocketOption, defaultProtocol
-                      , SocketType (..), Family (..)
-                      )
+import Network.Socket as Socket
 import Control.Exception
 import Data.Default
 import Control.Monad
@@ -50,7 +46,7 @@ worker thread env queue = handle logAnyError $ runResourceT $ runAWS env $ go wh
        case mpayload of
          Nothing -> liftIO $ stop thread
          Just payload -> do
-           result <- send payload
+           result <- AWS.send payload
            let status = view sersResponseStatus result
 
            unless (status >= 200 && status < 300) $
@@ -106,7 +102,7 @@ main = do
            email <- maybe missingEmailError return
                   $ input ^? key "email" . _String
 
-           response <- liftIO $ runResourceT $ runAWS env $ send $ makeEmail email
+           response <- liftIO $ runResourceT $ runAWS env $ AWS.send $ makeEmail email
            let status = view sersResponseStatus response
 
            unless (status >= 200 && status < 300) $
