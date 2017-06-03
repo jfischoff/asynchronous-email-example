@@ -114,6 +114,6 @@ main = do
 
            json $ object ["id" .= email]
 
-       atomically $ closeTBMQueue queue
-       mapM_ wait threads
+  atomically $ closeTBMQueue queue
+  mapM_ wait threads
 
