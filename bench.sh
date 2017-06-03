@@ -1,0 +1,1 @@
+ab -p json-body.json -T application/json -c 100 -n 10000 http://127.0.0.1:7000/user
