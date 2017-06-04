@@ -6,6 +6,7 @@ import Data.Aeson (object, (.=))
 import Data.Aeson.Lens
 import Control.Concurrent.STM.TBMQueue
 import Control.Concurrent.STM
+import Control.Concurrent
 import Network.AWS as AWS
 import Network.AWS.SES.SendEmail as AWS
 import Control.Immortal
@@ -17,9 +18,9 @@ import Control.Monad
 import Control.Lens (view, set, (^?))
 import Control.Monad.IO.Class
 import Data.Text
-import Data.Foldable
 import Network.AWS.SES.Types as AWS
 import Network.HTTP.Types.Status
+import System.Timeout as Timeout
 
 -- Create a socket.
 bindSocketPort :: PortNumber -> IO Socket
@@ -36,6 +37,11 @@ bindSocketPort p =
 
 logExcept :: SomeException -> IO ()
 logExcept = print
+
+logTimeout :: Maybe () -> IO ()
+logTimeout x = case x of
+  Nothing -> putStrLn "Email sending timed out!"
+  Just () -> return ()
 
 logFailedRequest :: MonadIO m => SendEmailResponse -> m ()
 logFailedRequest resp = do
@@ -59,8 +65,10 @@ enqueueEmail queue email = do
             $ tryWriteTBMQueue queue
             $ makeEmail email
 
-  for_ msuccess $ \success -> unless success $
-    putStrLn "Failed to enqueue email! Increase bounded queue size!"
+  case msuccess of
+    Nothing -> putStrLn "Something is wrong, the email queue is closed?!"
+    Just success -> unless success
+                  $ putStrLn "Failed to enqueue email!"
 
 -- The worker sets up a exception handler and then starts a loop
 -- to send emails
@@ -144,6 +152,41 @@ main = do
            logFailedRequest resp
 
            json $ object ["id" .= email]
+
+         post "/user-fork" $ do
+           input <- Scotty.body
+           email <- maybe missingEmailError return
+                  $ input ^? key "email" . _String
+
+           liftIO $ mask_ $ forkIOWithUnmask $ \unmask ->
+             handle logExcept $ unmask $ do
+               resp <- liftIO
+                     $ runResourceT
+                     $ runAWS env
+                     $ AWS.send
+                     $ makeEmail email
+
+               logFailedRequest resp
+
+           json $ object ["id" .= email]
+
+         post "/user-fork-timeout" $ do
+           input <- Scotty.body
+           email <- maybe missingEmailError return
+                  $ input ^? key "email" . _String
+
+           liftIO $ mask_ $ forkIOWithUnmask $ \unmask -> handle logExcept $
+             unmask $ logTimeout <=< Timeout.timeout (60 * 1000000) $ do
+               resp <- liftIO
+                     $ runResourceT
+                     $ runAWS env
+                     $ AWS.send
+                     $ makeEmail email
+
+               logFailedRequest resp
+
+           json $ object ["id" .= email]
+
 
   -- Close the queue. When the workers finish dequeuing all the
   -- emails the threads will shutdown.
